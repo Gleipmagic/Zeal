@@ -1,4 +1,5 @@
-name: Build Zeal ARI (experimental)
+name: Build Zeal - Target of Target (legacy action replacement)
+
 on:
   workflow_dispatch:
 
@@ -6,62 +7,55 @@ jobs:
   build:
     runs-on: windows-2022
     steps:
-      - name: Checkout your test branch
+      - name: Checkout selected synced Zeal branch
         uses: actions/checkout@v4
-        with:
-          path: experiment
-      - name: Prepare matching Zeal 1.4.8 source
+
+      - name: Verify Target of Target integration
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          git clone --quiet https://github.com/CoastalRedwood/Zeal.git ZealBase
-          if ($LASTEXITCODE -ne 0) { throw 'Could not clone upstream Zeal.' }
-          Push-Location ZealBase
-          try {
-            $tags = @(git tag --list)
-            $releaseTag = @('1.4.8', 'v1.4.8') | Where-Object { $tags -contains $_ } | Select-Object -First 1
-            if (-not $releaseTag) { throw 'Zeal 1.4.8 release tag missing.' }
-            git checkout --quiet --detach "refs/tags/$releaseTag"
-            if ($LASTEXITCODE -ne 0) { throw "Could not check out $releaseTag." }
-          }
-          finally { Pop-Location }
-          $files = @(
-            'Zeal/raid.cpp', 'Zeal/raid.h', 'Zeal/raid_autorejoin.h',
-            'Zeal/assist.cpp', 'Zeal/assist_target.cpp', 'Zeal/assist_target.h',
-            'Zeal/zeal.cpp', 'Zeal/passive_target_tracker.h', 'Zeal/hybrid_assist_gate.h',
-            'Zeal/hybrid_target_memory.h'
+          $required = @(
+            'Zeal.sln',
+            'Zeal/Zeal.vcxproj',
+            'Zeal/zeal.cpp',
+            'Zeal/assist.cpp',
+            'Zeal/assist_target.cpp',
+            'Zeal/assist_target.h',
+            'Zeal/hybrid_assist_gate.h',
+            'Zeal/passive_target_tracker.h'
           )
-          foreach ($file in $files) {
-            $src = Join-Path experiment $file
-            $dst = Join-Path ZealBase $file
-            if (-not (Test-Path $src)) { throw "Missing experimental file: $src" }
-            Copy-Item -LiteralPath $src -Destination $dst -Force
-            Write-Host "Using: $file"
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Required file missing: $file" }
+            Write-Host "Found: $file"
           }
-          if ((Get-Content 'ZealBase/Zeal/raid.cpp' -Raw) -notmatch '/raidmanagement') {
-            throw 'The test branch must include the working /raidmanagement source.'
+          $assist = Get-Content -LiteralPath 'Zeal/assist_target.cpp' -Raw
+          if ($assist -notmatch 'compare_insensitive\(args\[1\], "hybrid"\)') {
+            throw 'Wrong AssistBar source: missing /assistbar hybrid command. Upload the complete ZIP source files.'
           }
-          if ((Get-Content 'ZealBase/Zeal/assist_target.cpp' -Raw) -notmatch 'Hybrid ToT V4') {
-            throw 'Hybrid AssistBar source not found.'
+          $service = Get-Content -LiteralPath 'Zeal/zeal.cpp' -Raw
+          if ($service -notmatch 'assist_target') {
+            throw 'This upstream zeal.cpp has no AssistTarget registration. A compatible upstream integration is required; do not copy raid-era zeal.cpp over live source.'
           }
-      - name: Test portable assist logic
-        shell: pwsh
-        run: |
-          $src = 'experiment/tests/hybrid_assist_smoke.cpp'
-          if (-not (Test-Path $src)) { throw 'Missing assist state tests.' }
-          # The Windows compiler is on the hosted runner; use MSBuild setup below for Zeal.
+          $project = Get-Content -LiteralPath 'Zeal/Zeal.vcxproj' -Raw
+          if ($project -notmatch 'assist_target.cpp') {
+            throw 'Zeal.vcxproj does not compile assist_target.cpp. The current Zeal branch lacks the expected AssistBar integration.'
+          }
+          Write-Host 'Target of Target source and normal upstream registration found.'
+
       - name: Configure MSBuild
         uses: microsoft/setup-msbuild@v2
-      - name: Compile Zeal 1.4.8 Hybrid (Release x86)
-        working-directory: ZealBase
+
+      - name: Compile Zeal (Release x86)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           msbuild Zeal.sln /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 /p:ExportHeader="" /p:ScanDependencies=""
-          if ($LASTEXITCODE -ne 0) { throw "Zeal compilation failed ($LASTEXITCODE)" }
-          if (-not (Test-Path 'Release/Zeal.asi')) { throw 'Missing compiled Release/Zeal.asi' }
-      - name: Upload experimental Zeal.asi
+          if ($LASTEXITCODE -ne 0) { throw "Zeal compile failed with exit code $LASTEXITCODE. Check the FIRST compiler error above." }
+          if (-not (Test-Path -LiteralPath 'Release/Zeal.asi')) { throw 'Release/Zeal.asi was not produced.' }
+
+      - name: Upload Zeal.asi
         uses: actions/upload-artifact@v4
         with:
-          name: Zeal-1.4.8-Hybrid-ToT-V4-Experimental
-          path: ZealBase/Release/Zeal.asi
+          name: Zeal-Target-of-Target-Only
+          path: Release/Zeal.asi
           if-no-files-found: error
