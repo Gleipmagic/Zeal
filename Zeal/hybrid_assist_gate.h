@@ -1,7 +1,7 @@
 #pragma once
 // Experimental single-flight assist scheduler, isolated from the game for tests.
-// Responses have no request ID: this limits automatic requests, but cannot
-// absolutely distinguish a delayed automatic reply from a manual one.
+// Assist responses have no request ID. In-flight requests cannot be cancelled;
+// serialization reduces (but cannot eliminate) late-reply ambiguity.
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -9,84 +9,70 @@
 class HybridAssistGate {
  public:
   bool pending() const { return pending_; }
-  bool disabled_by_timeout() const { return disabled_by_timeout_; }
   uint16_t pending_source() const { return source_; }
-  uint32_t pending_sent_at() const { return sent_at_; }
   bool has_deferred_manual() const { return !manual_command_.empty(); }
   bool initial_due() const { return initial_due_; }
 
   void reset() {
     pending_ = false;
-    disabled_by_timeout_ = false;
     source_ = 0;
     selected_ = 0;
     initial_due_ = false;
-    selected_at_ = 0;
+    quiet_since_ = 0;
     sent_at_ = 0;
     last_poll_ = 0;
     last_manual_at_ = 0;
-    last_passive_at_ = 0;
-    have_passive_ = false;
+    last_timeout_at_ = 0;
     have_poll_ = false;
     have_manual_ = false;
+    have_timeout_ = false;
     manual_command_.clear();
   }
 
-  // A new target selection schedules ONE initial query. Repeated render frames
-  // with the same selection never schedule additional initial requests.
-  void selection(uint16_t source, uint32_t now) {
-    if (selected_ != source) {
-      selected_ = source;
-      selected_at_ = now;
-      initial_due_ = source != 0;
-      have_passive_ = false;
-      last_passive_at_ = 0;
-    }
+  // True only when the selected target changes. Never discard a transmitted
+  // request: its response still belongs to the old source Spawn ID.
+  bool selection(uint16_t source, uint32_t now) {
+    if (selected_ == source) return false;
+    selected_ = source;
+    quiet_since_ = now;
+    initial_due_ = source != 0;
+    // The last target's polling interval must not delay this target's first query.
+    have_poll_ = false;
+    return true;
   }
 
-  // An observed combat target is better than a yet-UNSENT query. Do not erase
-  // a pending request that was already transmitted; its reply can still arrive.
-  void observed_passive(uint16_t source, uint32_t observed_at) {
+  // Fresh evidence for the CURRENT selected target takes priority over UNSENT
+  // assists. Every new event restarts the full inactivity interval.
+  void observed_passive(uint16_t source, uint32_t now) {
     if (!source || source != selected_) return;
     initial_due_ = false;
-    if (!have_passive_ || observed_at != last_passive_at_) {
-      last_passive_at_ = observed_at;
-      have_passive_ = true;
-    }
+    quiet_since_ = now;
   }
 
-  bool try_start_initial(uint16_t source, uint32_t now, bool recent_passive,
-                         uint32_t min_between_initial_ms = 1500) {
-    if (!initial_due_ || !source || source != selected_ || disabled_by_timeout_) return false;
-    if (recent_passive) {
-      initial_due_ = false; // no server request necessary for this selection
-      return false;
-    }
-    if (pending_ || has_deferred_manual() ||
-        (have_poll_ && now - last_poll_ < min_between_initial_ms) ||
-        (have_manual_ && now - last_manual_at_ < 10000)) return false;
+  // One initial query per newly selected target unless a genuine event arrived
+  // first. If the previous target's request is still in flight, wait for it.
+  bool try_start_initial(uint16_t source, uint32_t now) {
+    if (!initial_due_ || !source || source != selected_ || pending_ ||
+        has_deferred_manual() || in_timeout_cooldown(now)) return false;
     initial_due_ = false;
     start(source, now);
     return true;
   }
 
-  // When no NEW animation/combat activity has been seen for the configured
-  // delay, request a refresh; repeat at the SAME configurable interval while
-  // idle, without ever having more than one automatic request in flight.
-  // Display freshness is independent: the last target is retained while idle.
-  bool try_start_fallback(uint16_t source, uint32_t now, uint32_t retry_ms = 1000) {
-    if (!source || source != selected_ || pending_ || disabled_by_timeout_ ||
-        has_deferred_manual() || initial_due_ ||
-        (now - selected_at_ < retry_ms) ||
-        (have_passive_ && now - last_passive_at_ < retry_ms) ||
-        (have_poll_ && now - last_poll_ < retry_ms) ||
-        (have_manual_ && now - last_manual_at_ < 10000)) return false;
+  // Once X ms pass with no fresh passive event, fall back to one assist.
+  // Continued silence allows one assist per X ms, but never a backlog.
+  bool try_start_idle(uint16_t source, uint32_t now, uint32_t interval_ms) {
+    if (!source || source != selected_ || pending_ || initial_due_ ||
+        has_deferred_manual() || in_timeout_cooldown(now) ||
+        now - quiet_since_ < interval_ms ||
+        (have_poll_ && now - last_poll_ < interval_ms) ||
+        (have_manual_ && now - last_manual_at_ < interval_ms)) return false;
     start(source, now);
     return true;
   }
 
-  // Defer at most the most recent typed /assist / keybind while a background
-  // response is outstanding, instead of creating multiple manual requests.
+  // Manual /assist requests take precedence; queue only the most recent while
+  // an automatic request is awaiting its reply.
   bool defer_manual(std::string command, uint32_t now) {
     last_manual_at_ = now;
     have_manual_ = true;
@@ -95,28 +81,25 @@ class HybridAssistGate {
     return true;
   }
 
-  // A deferred manual command is protected from another automatic poll from
-  // the time it is actually dispatched (not merely when the key was pressed).
-  void mark_manual_sent(uint32_t now) {
-    last_manual_at_ = now;
-    have_manual_ = true;
-  }
-
   bool receive(uint16_t& source) {
     if (!pending_) return false;
     source = source_;
     pending_ = false;
     source_ = 0;
+    have_timeout_ = false;
     return true;
   }
 
-  // A reply may still arrive after the timeout. Disable future automatic
-  // polling instead of resetting and creating an ambiguous request queue.
+  // Recovery rather than permanently disabling the user's fallback setting.
+  // A timed-out request may still have a delayed reply, so impose a further
+  // quiet period before another automatic request. No protocol request ID exists
+  // to guarantee perfect attribution of exceptionally late replies.
   bool check_timeout(uint32_t now, uint32_t timeout_ms = 3500) {
     if (!pending_ || now - sent_at_ < timeout_ms) return false;
     pending_ = false;
     source_ = 0;
-    disabled_by_timeout_ = true;
+    have_timeout_ = true;
+    last_timeout_at_ = now;
     return true;
   }
 
@@ -127,6 +110,10 @@ class HybridAssistGate {
   }
 
  private:
+  bool in_timeout_cooldown(uint32_t now) const {
+    return have_timeout_ && now - last_timeout_at_ < 2000;
+  }
+
   void start(uint16_t source, uint32_t now) {
     pending_ = true;
     source_ = source;
@@ -136,17 +123,16 @@ class HybridAssistGate {
   }
 
   bool pending_ = false;
-  bool disabled_by_timeout_ = false;
   uint16_t source_ = 0;
   uint16_t selected_ = 0;
   bool initial_due_ = false;
-  uint32_t selected_at_ = 0;
+  uint32_t quiet_since_ = 0;
   uint32_t sent_at_ = 0;
   uint32_t last_poll_ = 0;
   uint32_t last_manual_at_ = 0;
-  uint32_t last_passive_at_ = 0;
-  bool have_passive_ = false;
+  uint32_t last_timeout_at_ = 0;
   bool have_poll_ = false;
   bool have_manual_ = false;
+  bool have_timeout_ = false;
   std::string manual_command_;
 };
