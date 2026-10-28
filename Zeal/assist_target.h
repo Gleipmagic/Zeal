@@ -9,7 +9,6 @@
 #include "zeal_settings.h"
 #include "passive_target_tracker.h"
 #include "hybrid_assist_gate.h"
-#include "hybrid_target_memory.h"
 
 // Hybrid Target-of-Target: passive physical combat evidence first, optionally
 // one serialized synthetic /assist when evidence is idle. Opt-in experimental
@@ -33,15 +32,15 @@ class AssistTarget {
   ZealSetting<int> setting_mode = {0, "AssistBar", "Mode"};
   // Freshness window in ms for damage events to count as the current candidate.
   ZealSetting<int> setting_window_ms = {8000, "AssistBar", "WindowMs"};
-  // Optional diagnostics (rate-limited) for validating packet target fields.
-  ZealSetting<bool> setting_verbose = {false, "AssistBar", "Verbose"};
   ZealSetting<bool> setting_animation_enabled = {false, "AssistBar", "AnimationTarget"};
-  ZealSetting<bool> setting_animation_debug = {false, "AssistBar", "AnimationDiagnostics"};
-  // Never auto-enable polling from legacy INI settings. Hybrid fallback is opt-in.
+  // Hybrid fallback is session-only; the legacy refresh state is kept off in hybrid mode.
   ZealSetting<bool> setting_auto_refresh = {false, "AssistBar", "AutoRefresh"};
   ZealSetting<bool> setting_hybrid_fallback = {false};  // Session-only; explicit opt-in every launch.
-  // Inactivity delay AND repeat interval in milliseconds, valid [500, 60000].
-  ZealSetting<int> setting_refresh_interval_ms = {1000, "AssistBar", "RefreshIntervalMs"};
+  bool refresh_before_hybrid_ = false;    // Restore legacy refresh setting when hybrid turns off.
+  bool animation_before_hybrid_ = false;  // Restore the user's original animation option.
+  int mode_before_hybrid_ = 0;           // Restore defend mode if hybrid temporarily changed it.
+  // Quiet-time / retry interval in ms (clamped to [500, 60000]).
+  ZealSetting<int> setting_refresh_interval_ms = {10000, "AssistBar", "RefreshIntervalMs"};
 
   // Internal callback use only.
   bool HandleLMouseUp(short x, short y);
@@ -62,6 +61,7 @@ class AssistTarget {
   void UpdateDrag();      // LMB drag & drop repositioning, polled at the end of CallbackRender.
   void HandleDamagePacket(const Zeal::Packets::Damage_Struct *dmg);
   void HandleAnimationPacket(const Zeal::Packets::Animation_Struct *animation);
+  void SyncSelection(WORD id, DWORD now);  // Reset cached ToT on a genuine target change.
   static bool ValidLivingEntity(WORD id);
 
   std::unique_ptr<BitmapFont> bitmap_font = nullptr;
@@ -70,10 +70,10 @@ class AssistTarget {
 
   PassiveTargetTracker observations_;
   HybridAssistGate hybrid_;
-  HybridTargetMemory last_target_;
-  DWORD last_diagnostic_ms_ = 0;
-  bool version_announced_ = false;
-  void OnAssistResponse(WORD source, DWORD sent_at, const Zeal::Packets::EntityId_Struct *packet);
+  WORD assist_response_id_ = 0;
+  WORD assist_response_source_ = 0;
+  DWORD assist_response_time_ = 0;
+  void OnAssistResponse(const Zeal::Packets::EntityId_Struct *packet);
   void RunDeferredManualAssist();
 
 
