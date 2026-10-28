@@ -448,7 +448,12 @@ void AssistTarget::ParseArgs(const std::vector<std::string> &args) {
       Zeal::Game::print_chat("Usage: /assistbar hybrid on | off");
       return;
     }
-    if (on == setting_hybrid_fallback.get()) return;  // Repeating ON keeps a user's custom delay.
+    if (on == setting_hybrid_fallback.get()) {
+      // Confirm repeat commands without resetting a custom refresh interval.
+      Zeal::Game::print_chat("AssistBar hybrid is already %s (delay %d ms).",
+                             on ? "ON" : "OFF", setting_refresh_interval_ms.get());
+      return;
+    }
 
     // Do not abandon a request that has already been transmitted. Its reply
     // contains no request ID and must be drained by the existing callback.
@@ -480,12 +485,15 @@ void AssistTarget::ParseArgs(const std::vector<std::string> &args) {
       // Deliberately do NOT alter RefreshIntervalMs: keep the latest value.
     }
     // /assistbar on|off continues to control only bar visibility.
+    Zeal::Game::print_chat("AssistBar hybrid: %s (delay %d ms).",
+                           on ? "ON" : "OFF", setting_refresh_interval_ms.get());
     return;
   }
 
   // Original visibility commands control only whether the bar is displayed.
   if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "on")) {
     setting_enabled.set(true);
+    Zeal::Game::print_chat("AssistBar: ON");
     return;
   }
   if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "off")) {
@@ -495,6 +503,7 @@ void AssistTarget::ParseArgs(const std::vector<std::string> &args) {
     // eventual reply cannot be mistaken for a different command.
     SyncSelection(0, GetTickCount());
     candidate_entity = nullptr;
+    Zeal::Game::print_chat("AssistBar: OFF");
     return;
   }
   if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "toggle")) {
@@ -505,30 +514,43 @@ void AssistTarget::ParseArgs(const std::vector<std::string> &args) {
       SyncSelection(0, GetTickCount());
       candidate_entity = nullptr;
     }
+    Zeal::Game::print_chat("AssistBar: %s", on ? "ON" : "OFF");
     return;
   }
   if (args.size() == 4 && Zeal::String::compare_insensitive(args[1], "position")) {
     setting_position_left.set(atoi(args[2].c_str()));
     setting_position_top.set(atoi(args[3].c_str()));
+    Zeal::Game::print_chat("AssistBar position: %d, %d.",
+                           setting_position_left.get(), setting_position_top.get());
     return;
   }
   if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "font")) {
     const int size = atoi(args[2].c_str());
-    if (!IsAvailableFontSize(size)) return;
+    if (!IsAvailableFontSize(size)) {
+      Zeal::Game::print_chat("AssistBar: invalid font size %d.", size);
+      return;
+    }
     setting_font_size.set(size);
     if (bitmap_font) {
       bitmap_font->release();
       bitmap_font.reset();
     }
+    Zeal::Game::print_chat("AssistBar font size: %d.", setting_font_size.get());
     return;
   }
   if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "mode")) {
     if (Zeal::String::compare_insensitive(args[2], "assist")) setting_mode.set(0);
-    if (Zeal::String::compare_insensitive(args[2], "defend")) setting_mode.set(1);
+    else if (Zeal::String::compare_insensitive(args[2], "defend")) setting_mode.set(1);
+    else {
+      Zeal::Game::print_chat("Usage: /assistbar mode assist | defend");
+      return;
+    }
+    Zeal::Game::print_chat("AssistBar mode: %s.", setting_mode.get() == 0 ? "assist" : "defend");
     return;
   }
   if (args.size() == 3 && Zeal::String::compare_insensitive(args[1], "window")) {
     setting_window_ms.set(std::clamp(atoi(args[2].c_str()), 1000, 60000));
+    Zeal::Game::print_chat("AssistBar evidence window: %d ms.", setting_window_ms.get());
     return;
   }
   // Keep the original refresh on/off and millisecond control. While hybrid
@@ -539,6 +561,10 @@ void AssistTarget::ParseArgs(const std::vector<std::string> &args) {
     if (args.size() == 3 && Zeal::String::compare_insensitive(args[2], "off")) {
       if (hybrid_active) refresh_before_hybrid_ = false;
       else setting_auto_refresh.set(false);
+      Zeal::Game::print_chat(hybrid_active
+          ? "AssistBar normal refresh: OFF after hybrid (hybrid still active at %d ms)."
+          : "AssistBar refresh: OFF (delay retained at %d ms).",
+          setting_refresh_interval_ms.get());
       return;
     }
     if (Zeal::String::compare_insensitive(args[2], "on") && (args.size() == 3 || args.size() == 4)) {
@@ -546,6 +572,10 @@ void AssistTarget::ParseArgs(const std::vector<std::string> &args) {
         setting_refresh_interval_ms.set(std::clamp(atoi(args[3].c_str()), 500, 60000));
       if (hybrid_active) refresh_before_hybrid_ = true;
       else setting_auto_refresh.set(true);
+      Zeal::Game::print_chat(hybrid_active
+          ? "AssistBar hybrid delay: %d ms (normal refresh saved as ON for when hybrid is OFF)."
+          : "AssistBar refresh: ON (%d ms).",
+          setting_refresh_interval_ms.get());
       return;
     }
     // Support the /assistbar refresh <ms> shorthand from previous test builds.
@@ -554,9 +584,14 @@ void AssistTarget::ParseArgs(const std::vector<std::string> &args) {
       const char* value = args[2].c_str();
       char* end = nullptr;
       const long ms = std::strtol(value, &end, 10);
-      if (end != value && *end == '\0')
+      if (end != value && *end == '\0') {
         setting_refresh_interval_ms.set(static_cast<int>(std::clamp(ms, 500L, 60000L)));
+        Zeal::Game::print_chat("AssistBar delay: %d ms.", setting_refresh_interval_ms.get());
+        return;
+      }
     }
+    Zeal::Game::print_chat("Usage: /assistbar refresh on <ms> | off | <ms>");
     return;
   }
+  Zeal::Game::print_chat("AssistBar: unknown option. Type /assistbar for commands.");
 }
