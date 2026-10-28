@@ -1,0 +1,52 @@
+name: Build Zeal Target of Target Only
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout selected fork branch
+        uses: actions/checkout@v4
+
+      - name: Validate Target of Target source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'Zeal/assist.cpp',
+            'Zeal/assist_target.cpp',
+            'Zeal/assist_target.h',
+            'Zeal/zeal.cpp',
+            'Zeal/passive_target_tracker.h',
+            'Zeal/hybrid_assist_gate.h'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Missing Target-of-Target file in selected branch: $file"
+            }
+            Write-Host "Found: $file"
+          }
+          $src = Get-Content 'Zeal/assist_target.cpp' -Raw
+          if ($src -notmatch '"hybrid"') {
+            throw 'This branch does not contain the hybrid AssistBar command.'
+          }
+          if (-not (Test-Path 'Zeal.sln')) { throw 'Missing Zeal.sln at repository root.' }
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Compile Target of Target (Release x86)
+        shell: pwsh
+        run: |
+          msbuild Zeal.sln /m /p:Configuration=Release /p:Platform=x86 /p:LanguageStandard=stdcpp20 /p:ExportHeader="" /p:ScanDependencies=""
+          if ($LASTEXITCODE -ne 0) { throw "Zeal compilation failed ($LASTEXITCODE)." }
+          if (-not (Test-Path 'Release/Zeal.asi')) { throw 'Missing compiled Release/Zeal.asi.' }
+
+      - name: Upload Zeal.asi
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zeal-Target-of-Target-Only
+          path: Release/Zeal.asi
+          if-no-files-found: error
