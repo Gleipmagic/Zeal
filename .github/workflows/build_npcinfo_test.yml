@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - npc-info-test
+      - npc-update
 
 env:
   SOLUTION_FILE_PATH: ./Zeal.sln
