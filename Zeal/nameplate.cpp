@@ -96,6 +96,7 @@ static int __fastcall SetNameSpriteTint_UpdateState(void *this_display, void *no
 
 // Flushes any deleted entities in the info_map cache.
 void NamePlate::handle_entity_destructor(Zeal::GameStructures::Entity *entity) {
+  if (entity) faction_reaction_by_spawn_id.erase(entity->SpawnId);
   auto it = nameplate_info_map.find(entity);
   if (it != nameplate_info_map.end()) nameplate_info_map.erase(it);
 }
@@ -243,6 +244,15 @@ NamePlate::NamePlate(ZealService *zeal) {
                              return true;
                            });
 
+  zeal->commands_hook->Add("/npcnames", {"/npcname"}, "NPC faction-color and role-label nameplate options.",
+                           [this](std::vector<std::string> &args) {
+                             handle_npcnames_command(args);
+                             return true;
+                           });
+
+  zeal->callbacks->AddOutputText(
+      [this](Zeal::GameUI::ChatWnd *&wnd, std::string &msg, short &channel) { handle_faction_output(msg); });
+
   zeal->commands_hook->Add("/shownames", {"/show", "/showname"}, "Show names command with extended support.",
                            [this](std::vector<std::string> &args) {
                              return handle_shownames_command(
@@ -274,6 +284,119 @@ NamePlate::NamePlate(ZealService *zeal) {
 }
 
 NamePlate::~NamePlate() {}
+
+std::string NamePlate::get_npc_role_label(const Zeal::GameStructures::Entity &entity) const {
+  if (entity.Type != Zeal::GameEnums::EntityTypes::NPC || entity.PetOwnerSpawnId) return {};
+
+  if (entity.Class == Zeal::GameEnums::ClassTypes::Banker) return "Banker";
+  if (entity.Class == Zeal::GameEnums::ClassTypes::Merchant) return "Merchant";
+
+  // EQ encodes guildmasters/trainers as base class + 16 (17..31).
+  if (entity.Class > 16 && entity.Class < 32) {
+    int base_class = entity.Class - 16;
+    std::string class_name = Zeal::Game::get_class_desc(base_class);
+    if (class_name.empty() || class_name == "Unknown") return "Trainer";
+    return class_name + " Trainer";
+  }
+
+  return {};
+}
+
+void NamePlate::handle_npcnames_command(const std::vector<std::string> &args) {
+  if (args.size() == 2) {
+    if (args[1] == "roles") {
+      setting_npc_roles.toggle();
+      Zeal::Game::print_chat("NPC role labels %s", setting_npc_roles.get() ? "enabled" : "disabled");
+      return;
+    }
+    if (args[1] == "faction") {
+      setting_npc_faction_colors.toggle();
+      Zeal::Game::print_chat("NPC faction name colors %s", setting_npc_faction_colors.get() ? "enabled" : "disabled");
+      if (setting_npc_faction_colors.get())
+        Zeal::Game::print_chat("Faction colors are learned from normal /consider results; Zeal does not auto-consider NPCs.");
+      return;
+    }
+    if (args[1] == "on") {
+      setting_npc_roles.set(true);
+      setting_npc_faction_colors.set(true);
+      Zeal::Game::print_chat("NPC name information enabled (roles + learned faction colors)");
+      return;
+    }
+    if (args[1] == "off") {
+      setting_npc_roles.set(false);
+      setting_npc_faction_colors.set(false);
+      Zeal::Game::print_chat("NPC name information disabled");
+      return;
+    }
+    if (args[1] == "status") {
+      Zeal::Game::print_chat("NPC roles: %s | faction colors: %s | learned NPCs this zone: %u",
+                             setting_npc_roles.get() ? "ON" : "OFF",
+                             setting_npc_faction_colors.get() ? "ON" : "OFF",
+                             static_cast<unsigned int>(faction_reaction_by_spawn_id.size()));
+      return;
+    }
+    if (args[1] == "clear") {
+      faction_reaction_by_spawn_id.clear();
+      Zeal::Game::print_chat("NPC learned faction colors cleared");
+      return;
+    }
+  }
+
+  Zeal::Game::print_chat("Usage: /npcnames <roles|faction|on|off|status|clear>");
+}
+
+void NamePlate::handle_faction_output(std::string &msg) {
+  if (!setting_npc_faction_colors.get()) return;
+
+  auto *target = Zeal::Game::get_target();
+  if (!target || target->Type != Zeal::GameEnums::EntityTypes::NPC) return;
+
+  std::string text = msg;
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+  FactionReaction reaction = FactionReaction::Unknown;
+  if (text.find("scowls at you") != std::string::npos && text.find("ready to attack") != std::string::npos)
+    reaction = FactionReaction::Scowls;
+  else if (text.find("threateningly") != std::string::npos)
+    reaction = FactionReaction::Threatening;
+  else if (text.find("dubious") != std::string::npos)
+    reaction = FactionReaction::Dubious;
+  else if (text.find("apprehensive") != std::string::npos)
+    reaction = FactionReaction::Apprehensive;
+  else if (text.find("indifferent") != std::string::npos)
+    reaction = FactionReaction::Indifferent;
+  else if (text.find("amiabl") != std::string::npos)
+    reaction = FactionReaction::Amiable;
+  else if (text.find("kindly") != std::string::npos)
+    reaction = FactionReaction::Kindly;
+  else if (text.find("warmly") != std::string::npos)
+    reaction = FactionReaction::Warmly;
+  else if (text.find("as an ally") != std::string::npos || text.find("is an ally") != std::string::npos)
+    reaction = FactionReaction::Ally;
+
+  if (reaction != FactionReaction::Unknown) faction_reaction_by_spawn_id[target->SpawnId] = reaction;
+}
+
+bool NamePlate::get_faction_reaction_color(const Zeal::GameStructures::Entity &entity, DWORD &color) const {
+  if (!setting_npc_faction_colors.get() || entity.Type != Zeal::GameEnums::EntityTypes::NPC) return false;
+  auto it = faction_reaction_by_spawn_id.find(entity.SpawnId);
+  if (it == faction_reaction_by_spawn_id.end()) return false;
+
+  switch (it->second) {
+    case FactionReaction::Scowls:       color = D3DCOLOR_XRGB(255, 40, 40); break;      // red
+    case FactionReaction::Threatening:  color = D3DCOLOR_XRGB(255, 80, 170); break;    // pink
+    case FactionReaction::Dubious:      color = D3DCOLOR_XRGB(255, 145, 35); break;    // orange
+    case FactionReaction::Apprehensive: color = D3DCOLOR_XRGB(255, 225, 40); break;    // yellow
+    case FactionReaction::Indifferent:  color = D3DCOLOR_XRGB(235, 235, 235); break;   // white
+    case FactionReaction::Amiable:      color = D3DCOLOR_XRGB(150, 255, 120); break;   // light green
+    case FactionReaction::Kindly:       color = D3DCOLOR_XRGB(60, 220, 70); break;     // green
+    case FactionReaction::Warmly:       color = D3DCOLOR_XRGB(70, 220, 255); break;    // cyan
+    case FactionReaction::Ally:         color = D3DCOLOR_XRGB(80, 130, 255); break;    // blue
+    default: return false;
+  }
+  return true;
+}
 
 void NamePlate::parse_args(const std::vector<std::string> &args) {
   static std::unordered_map<std::string, ZealSetting<bool> *> command_map = {
@@ -655,7 +778,11 @@ bool NamePlate::handle_SetNameSpriteTint(Zeal::GameStructures::Entity *entity) {
     color_index = ColorIndex::Tagged;
 
   auto color = D3DCOLOR_XRGB(128, 255, 255);  // Approximately the default nameplate color.
-  if (color_index == ColorIndex::UseConsider)
+  DWORD faction_color = 0;
+  const bool use_faction_color = get_faction_reaction_color(*entity, faction_color);
+  if (use_faction_color)
+    color = faction_color;
+  else if (color_index == ColorIndex::UseConsider)
     color = Zeal::Game::GetLevelCon(entity);
   else if (color_index != ColorIndex::UseClient && ZealService::get_instance()->ui && get_color_callback)
     color = get_color_callback(static_cast<int>(color_index));
@@ -772,6 +899,10 @@ std::string NamePlate::generate_nameplate_text(const Zeal::GameStructures::Entit
   // Handle the simpler NPC and corpses first.
   if (entity.Type != Zeal::GameEnums::Player) {
     text += std::string(Zeal::Game::trim_name(entity.Name));
+    if (setting_npc_roles.get() && entity.Type == Zeal::GameEnums::EntityTypes::NPC) {
+      std::string role = get_npc_role_label(entity);
+      if (!role.empty()) text += std::format(" <{}>", role);
+    }
     if (is_target) text += generate_target_postamble(entity);
     if (setting_show_pet_owner_name.get() && Zeal::Game::is_player_pet(entity)) {
       auto pet_owner = Zeal::Game::get_entity_by_id(entity.PetOwnerSpawnId);

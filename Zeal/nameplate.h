@@ -72,6 +72,10 @@ class NamePlate {
   ZealSetting<bool> setting_attack_only = {false, "Zeal", "NameplateAttackOnly", false};
   ZealSetting<bool> setting_inline_guild = {false, "Zeal", "NameplateInlineGuild", false};
 
+  // NPC information overlays. Kept separate from the normal player/con nameplate settings.
+  ZealSetting<bool> setting_npc_roles = {false, "Zeal", "NpcNameplateRoles", false};
+  ZealSetting<bool> setting_npc_faction_colors = {false, "Zeal", "NpcNameplateFactionColors", false};
+
   ZealSetting<bool> setting_extended_nameplate = {true, "Zeal", "NameplateExtended", false,
                                                   [this](const bool &val) { mem::write<BYTE>(0x4B0B3D, val ? 0 : 1); }};
 
@@ -145,6 +149,10 @@ class NamePlate {
   bool is_group_member(const Zeal::GameStructures::Entity &entity) const;
   bool is_raid_member(const Zeal::GameStructures::Entity &entity) const;
   bool is_hp_updated(const Zeal::GameStructures::Entity *entity) const;
+  std::string get_npc_role_label(const Zeal::GameStructures::Entity &entity) const;
+  void handle_npcnames_command(const std::vector<std::string> &args);
+  void handle_faction_output(std::string &msg);
+  bool get_faction_reaction_color(const Zeal::GameStructures::Entity &entity, DWORD &color) const;
   void handle_tag_command(const std::vector<std::string> &args);
   bool handle_tag_target(const std::string &target_text);
   bool handle_zeal_spam_filter(short &channel, std::string &msg);
@@ -172,4 +180,18 @@ class NamePlate {
   int tag_channel_number = -1;
   int normal_shownames = -1;           // Cached value of overridden /shownames setting.
   bool raid_shownames_active = false;  // Tracks whether raid override is active.
+
+  enum class FactionReaction : BYTE {
+    Unknown = 0,
+    Scowls,
+    Threatening,
+    Dubious,
+    Apprehensive,
+    Indifferent,
+    Amiable,
+    Kindly,
+    Warmly,
+    Ally,
+  };
+  std::unordered_map<WORD, FactionReaction> faction_reaction_by_spawn_id;
 };
