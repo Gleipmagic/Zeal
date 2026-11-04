@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "commands.h"
+#include "directx.h"
 #include "d3dx8/d3dx8.h"
 #include "game_functions.h"
 #include "string_util.h"
