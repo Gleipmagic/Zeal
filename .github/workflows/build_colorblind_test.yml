@@ -1,0 +1,66 @@
+name: Build Colorblind Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - colorblind-test
+
+env:
+  SOLUTION_FILE_PATH: ./Zeal.sln
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Get short commit hash
+        id: git
+        shell: bash
+        run: echo "short_hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build x86 Release
+        shell: pwsh
+        env:
+          ZEAL_BUILD_VERSION: CBMD-${{ steps.git.outputs.short_hash }}
+        run: |
+          msbuild /m /p:Configuration=Release /p:Platform=x86 /p:zeal_build_version=$env:ZEAL_BUILD_VERSION /p:LanguageStandard=stdcpp20 $env:SOLUTION_FILE_PATH /p:ExportHeader="" /p:ScanDependencies=""
+
+      - name: Package test build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item ./Release/Zeal.asi ./artifact/Zeal.asi
+          if (Test-Path ./Release/Zeal.pdb) { Copy-Item ./Release/Zeal.pdb ./artifact/Zeal.pdb }
+          Copy-Item ./Zeal/uifiles ./artifact/uifiles -Recurse
+          @"
+          Zeal CBMD test build
+
+          Commands:
+            /colorblind status
+            /colorblind protan
+            /colorblind deutan
+            /colorblind tritan
+            /colorblind strength 0-100
+            /colorblind off
+
+          Alias:
+            /cb
+
+          The filter is OFF by default. If the DX8 renderer cannot support the
+          full-screen copy/shader pass, Zeal prints a warning and leaves the
+          normal game rendering intact.
+          "@ | Set-Content ./artifact/CBMD_TEST.txt
+
+      - name: Upload test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeal-cbmd-test-${{ steps.git.outputs.short_hash }}
+          path: artifact
+          if-no-files-found: error
