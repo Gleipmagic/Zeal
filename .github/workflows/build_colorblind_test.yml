@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - colorblind-test
+      - colorblind
 
 env:
   SOLUTION_FILE_PATH: ./Zeal.sln
