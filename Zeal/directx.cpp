@@ -1,6 +1,7 @@
 #include "directx.h"
 
 #include "callbacks.h"
+#include "colorblind.h"
 #include "hook_wrapper.h"
 #include "zeal.h"
 #pragma comment(lib, "d3dx8/d3d8.lib")
@@ -40,6 +41,9 @@ HRESULT WINAPI Local_BeginScene(LPDIRECT3DDEVICE8 pDevice) {
 }
 
 HRESULT WINAPI Local_EndScene(LPDIRECT3DDEVICE8 pDevice) {
+  // Apply before the real EndScene so the old DX8 client remains inside a valid scene.
+  if (pDevice && ZealService::get_instance()->colorblind)
+    ZealService::get_instance()->colorblind->Apply(pDevice);
   HRESULT ret = ZealService::get_instance()->hooks->hook_map["EndScene"]->original(Local_EndScene)(pDevice);
   if (ZealService::get_instance()->callbacks)
     ZealService::get_instance()->callbacks->invoke_generic(callback_type::EndScene);
@@ -47,6 +51,7 @@ HRESULT WINAPI Local_EndScene(LPDIRECT3DDEVICE8 pDevice) {
 }
 
 HRESULT WINAPI Local_Reset(IDirect3DDevice8 *pDevice, D3DPRESENT_PARAMETERS *pPresentationParameters) {
+  if (ZealService::get_instance()->colorblind) ZealService::get_instance()->colorblind->OnDeviceLost();
   if (ZealService::get_instance()->callbacks)
     ZealService::get_instance()->callbacks->invoke_generic(callback_type::DXReset);
   HRESULT ret =
@@ -84,6 +89,7 @@ void DirectX::InitializeDevice() {
 }
 
 void DirectX::CleanDevice() {
+  if (ZealService::get_instance()->colorblind) ZealService::get_instance()->colorblind->OnDeviceLost();
   if (!device) return;  // Nothing to clean.
 
   // Remove our hooks.

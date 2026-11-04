@@ -121,6 +121,7 @@
     <ClInclude Include="camera_math.h" />
     <ClInclude Include="chat.h" />
     <ClInclude Include="commands.h" />
+    <ClInclude Include="colorblind.h" />
     <ClInclude Include="cycle_target.h" />
     <ClInclude Include="game_addresses.h" />
     <ClInclude Include="game_functions.h" />
@@ -211,6 +212,7 @@
     <ClCompile Include="camera_math.cpp" />
     <ClCompile Include="chat.cpp" />
     <ClCompile Include="commands.cpp" />
+    <ClCompile Include="colorblind.cpp" />
     <ClCompile Include="cycle_target.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="game_functions.cpp" />

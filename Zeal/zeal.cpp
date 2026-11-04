@@ -21,6 +21,7 @@
 #include "chat.h"
 #include "chatfilter.h"
 #include "commands.h"
+#include "colorblind.h"
 #include "crash_handler.h"
 #include "cycle_target.h"
 #include "directx.h"
@@ -132,6 +133,7 @@ ZealService::ZealService() {
   spell_effects = MakeCheckedUnique(SpellEffects);
   physics = MakeCheckedUnique(Physics);
   dx = MakeCheckedUnique(DirectX);
+  colorblind = MakeCheckedUnique(ColorblindFilter);  // Full-screen accessibility filter; uses DX at render time.
   gamestr_hook = MakeCheckedUnique(GameStr);
   cycle_target = MakeCheckedUnique(CycleTarget);
   camera_mods = MakeCheckedUnique(CameraMods);

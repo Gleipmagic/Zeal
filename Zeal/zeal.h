@@ -49,6 +49,7 @@ class ZealService {
   std::unique_ptr<class SpellEffects> spell_effects = nullptr;
   std::unique_ptr<class Physics> physics = nullptr;
   std::unique_ptr<class DirectX> dx = nullptr;
+  std::unique_ptr<class ColorblindFilter> colorblind = nullptr;
   std::unique_ptr<class GameStr> gamestr_hook = nullptr;
   std::unique_ptr<class CycleTarget> cycle_target = nullptr;
   std::unique_ptr<class CameraMods> camera_mods = nullptr;
