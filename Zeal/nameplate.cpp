@@ -19,6 +19,9 @@
 #include "tick.h"
 #include "zeal.h"
 
+// Existing helper implemented in commands.cpp. Calls the original EQ command interpreter.
+void ForwardCommand(std::string cmd);
+
 // Test cases:
 // - Command line toggling of options and triggered options menu updates
 // - Options menu toggling of options
@@ -96,7 +99,11 @@ static int __fastcall SetNameSpriteTint_UpdateState(void *this_display, void *no
 
 // Flushes any deleted entities in the info_map cache.
 void NamePlate::handle_entity_destructor(Zeal::GameStructures::Entity *entity) {
-  if (entity) faction_reaction_by_spawn_id.erase(entity->SpawnId);
+  if (entity) {
+    faction_reaction_by_spawn_id.erase(entity->SpawnId);
+    faction_attempt_tick_by_spawn_id.erase(entity->SpawnId);
+    if (pending_auto_consider_spawn_id == entity->SpawnId) pending_auto_consider_spawn_id = 0;
+  }
   auto it = nameplate_info_map.find(entity);
   if (it != nameplate_info_map.end()) nameplate_info_map.erase(it);
 }
@@ -211,6 +218,61 @@ void NamePlate::check_raid_shownames() {
   }
 }
 
+// Automatically learns player-specific faction reactions for nearby visible NPCs.
+// This intentionally uses the client's normal /consider path instead of hard-coding a network opcode.
+// One unknown NPC is checked at a time and the user's target is restored immediately.
+void NamePlate::auto_scan_npc_faction() {
+  if (!setting_npc_faction_colors.get()) {
+    pending_auto_consider_spawn_id = 0;
+    return;
+  }
+
+  if (!Zeal::Game::is_in_game() || !Zeal::Game::get_self()) {
+    pending_auto_consider_spawn_id = 0;
+    faction_reaction_by_spawn_id.clear();
+    faction_attempt_tick_by_spawn_id.clear();
+    last_auto_faction_scan_tick = 0;
+    return;
+  }
+
+  const DWORD now = GetTickCount();
+
+  // Give the previous consider request time to return before issuing another.
+  if (pending_auto_consider_spawn_id != 0) {
+    if ((now - pending_auto_consider_tick) < kAutoFactionResponseTimeoutMs) return;
+    pending_auto_consider_spawn_id = 0;  // Timed out; it may be retried later.
+  }
+
+  if ((now - last_auto_faction_scan_tick) < kAutoFactionPollIntervalMs) return;
+  last_auto_faction_scan_tick = now;
+
+  // Match normal nearby targeting limits and only consider actors the client currently regards as visible.
+  auto visible_entities = Zeal::Game::get_world_visible_actor_list(kAutoFactionScanDistance, false);
+  for (auto *entity : visible_entities) {
+    if (!entity || entity->Type != Zeal::GameEnums::EntityTypes::NPC || entity->PetOwnerSpawnId) continue;
+    if (faction_reaction_by_spawn_id.count(entity->SpawnId)) continue;
+
+    auto attempt = faction_attempt_tick_by_spawn_id.find(entity->SpawnId);
+    if (attempt != faction_attempt_tick_by_spawn_id.end() &&
+        (now - attempt->second) < kAutoFactionRetryIntervalMs)
+      continue;
+
+    // The original EQ /consider command reads the current target. Temporarily point it at the
+    // candidate, issue /consider through the original command interpreter, then restore the target
+    // in the same main-loop callback. pending_auto_consider_spawn_id associates the asynchronous
+    // faction text with the NPC that was queried.
+    auto *saved_target = Zeal::Game::get_target();
+    pending_auto_consider_spawn_id = entity->SpawnId;
+    pending_auto_consider_tick = now;
+    faction_attempt_tick_by_spawn_id[entity->SpawnId] = now;
+
+    Zeal::Game::set_target(entity);
+    ForwardCommand("/consider");
+    Zeal::Game::set_target(saved_target);
+    return;  // Only one server request per polling interval.
+  }
+}
+
 // Support adding text_tag as a tooltip of the target window.
 int __fastcall TargetWnd_PostDraw(Zeal::GameUI::SidlWnd *this_ptr, void *not_used) {
   ZealService::get_instance()->nameplate->handle_targetwnd_postdraw(this_ptr);
@@ -274,7 +336,12 @@ NamePlate::NamePlate(ZealService *zeal) {
   zeal->callbacks->AddGeneric([this]() { clean_ui(); }, callback_type::DXReset);  // Just release all resources.
   zeal->callbacks->AddGeneric([this]() { clean_ui(); }, callback_type::DXCleanDevice);
   zeal->callbacks->AddGeneric([this]() { render_ui(); }, callback_type::RenderUI);
-  zeal->callbacks->AddGeneric([this]() { check_raid_shownames(); }, callback_type::MainLoop);
+  zeal->callbacks->AddGeneric(
+      [this]() {
+        check_raid_shownames();
+        auto_scan_npc_faction();
+      },
+      callback_type::MainLoop);
 }
 
 NamePlate::~NamePlate() {}
@@ -320,13 +387,13 @@ void NamePlate::handle_npcnames_command(const std::vector<std::string> &args) {
       setting_npc_faction_colors.toggle();
       Zeal::Game::print_chat("NPC faction name colors %s", setting_npc_faction_colors.get() ? "enabled" : "disabled");
       if (setting_npc_faction_colors.get())
-        Zeal::Game::print_chat("Faction colors are learned from normal /consider results; Zeal does not auto-consider NPCs.");
+        Zeal::Game::print_chat("Faction colors automatically scan nearby visible NPCs using throttled consider requests.");
       return;
     }
     if (Zeal::String::compare_insensitive(args[1], "on")) {
       setting_npc_roles.set(true);
       setting_npc_faction_colors.set(true);
-      Zeal::Game::print_chat("NPC name information enabled (roles + learned faction colors)");
+      Zeal::Game::print_chat("NPC name information enabled (roles + automatic faction colors)");
       return;
     }
     if (Zeal::String::compare_insensitive(args[1], "off")) {
@@ -352,8 +419,14 @@ void NamePlate::handle_npcnames_command(const std::vector<std::string> &args) {
 void NamePlate::handle_faction_output(std::string &msg) {
   if (!setting_npc_faction_colors.get()) return;
 
-  auto *target = Zeal::Game::get_target();
-  if (!target || target->Type != Zeal::GameEnums::EntityTypes::NPC) return;
+  // Automatic considers restore the user's target immediately, so associate their asynchronous
+  // response with the remembered spawn id. Manual /consider continues to use the current target.
+  WORD faction_spawn_id = pending_auto_consider_spawn_id;
+  if (faction_spawn_id == 0) {
+    auto *target = Zeal::Game::get_target();
+    if (!target || target->Type != Zeal::GameEnums::EntityTypes::NPC) return;
+    faction_spawn_id = target->SpawnId;
+  }
 
   std::string text = msg;
   std::transform(text.begin(), text.end(), text.begin(),
@@ -379,7 +452,10 @@ void NamePlate::handle_faction_output(std::string &msg) {
   else if (text.find("as an ally") != std::string::npos || text.find("is an ally") != std::string::npos)
     reaction = FactionReaction::Ally;
 
-  if (reaction != FactionReaction::Unknown) faction_reaction_by_spawn_id[target->SpawnId] = reaction;
+  if (reaction != FactionReaction::Unknown) {
+    faction_reaction_by_spawn_id[faction_spawn_id] = reaction;
+    if (pending_auto_consider_spawn_id == faction_spawn_id) pending_auto_consider_spawn_id = 0;
+  }
 }
 
 bool NamePlate::get_faction_reaction_color(const Zeal::GameStructures::Entity &entity, DWORD &color) const {
