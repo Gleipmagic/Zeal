@@ -1,40 +1,64 @@
 name: Build NPC Info Test
 
 on:
-  workflow_dispatch:
   push:
     branches:
-      - main
       - npc-update
+  workflow_dispatch:
 
-env:
-  SOLUTION_FILE_PATH: ./Zeal.sln
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: windows-2022
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    runs-on: windows-latest
 
-      - name: Add MSBuild to PATH
+    steps:
+      - name: Checkout npc-update branch
+        uses: actions/checkout@v4
+        with:
+          ref: npc-update
+          fetch-depth: 0
+
+      - name: Show exact source being built
+        shell: pwsh
+        run: |
+          Write-Host "Branch:"
+          git branch --show-current
+          Write-Host "Commit:"
+          git rev-parse HEAD
+          Write-Host "NPC source markers:"
+          Select-String -Path ".\Zeal\nameplate.cpp" -Pattern "npcfaction","npcroles","handle_npcnames_command" -SimpleMatch
+
+      - name: Set build version
+        shell: pwsh
+        run: |
+          $short = (git rev-parse --short HEAD).Trim()
+          "ZEAL_BUILD_VERSION=NPCINFO-$short" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Build version: NPCINFO-$short"
+
+      - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Get short commit hash
-        id: git
-        shell: bash
-        run: echo "short_hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Build x86 Release
+      - name: Build Zeal
         shell: pwsh
         env:
-          ZEAL_BUILD_VERSION: NPCINFO-${{ steps.git.outputs.short_hash }}
+          SOLUTION_FILE_PATH: ./Zeal.sln
         run: |
           msbuild /m /p:Configuration=Release /p:Platform=x86 /p:zeal_build_version=$env:ZEAL_BUILD_VERSION /p:LanguageStandard=stdcpp20 $env:SOLUTION_FILE_PATH /p:ExportHeader="" /p:ScanDependencies=""
+
+      - name: Verify Zeal.asi
+        shell: pwsh
+        run: |
+          if (!(Test-Path ".\Release\Zeal.asi")) {
+            throw "Release\Zeal.asi was not created."
+          }
+          Get-FileHash ".\Release\Zeal.asi" -Algorithm SHA256
+          Get-Item ".\Release\Zeal.asi" | Format-List Name,Length,LastWriteTime
 
       - name: Upload Zeal.asi only
         uses: actions/upload-artifact@v4
         with:
-          name: Zeal-ASI-${{ steps.git.outputs.short_hash }}
-          path: ./Release/Zeal.asi
+          name: Zeal-NPCInfo-${{ github.run_number }}
+          path: Release/Zeal.asi
           if-no-files-found: error
