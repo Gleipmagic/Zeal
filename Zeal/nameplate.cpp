@@ -238,30 +238,9 @@ NamePlate::NamePlate(ZealService *zeal) {
                    hook_type_replace_call);  // New target
 
   zeal->commands_hook->Add("/nameplate", {}, "Toggles nameplate options on/off.",
-                           [this, zeal](std::vector<std::string> &args) {
-                             // Diagnostic path that uses the already-proven /nameplate registration.
-                             // This tells us what is actually present in the live command table.
-                             if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "npctest")) {
-                               const bool npc_registered =
-                                   zeal->commands_hook->CommandFunctions.count("/npcnames") != 0;
-                               Zeal::Game::print_chat(
-                                   "NPC Info diagnostic: module ACTIVE | /npcnames registered: %s | roles: %s | faction: %s",
-                                   npc_registered ? "YES" : "NO",
-                                   setting_npc_roles.get() ? "ON" : "OFF",
-                                   setting_npc_faction_colors.get() ? "ON" : "OFF");
-                               return true;
-                             }
-
+                           [this](std::vector<std::string> &args) {
                              parse_args(args);
                              if (update_options_ui_callback) update_options_ui_callback();
-                             return true;
-                           });
-
-  // NPC Info command is registered locally in the NamePlate module.
-  // This mirrors the proven module-local command pattern used by working Zeal features.
-  zeal->commands_hook->Add("/npcnames", {"/npcname"}, "NPC faction-color and role-label nameplate options.",
-                           [this](std::vector<std::string> &args) {
-                             handle_npcnames_command(args);
                              return true;
                            });
 
@@ -400,16 +379,7 @@ void NamePlate::handle_faction_output(std::string &msg) {
   else if (text.find("as an ally") != std::string::npos || text.find("is an ally") != std::string::npos)
     reaction = FactionReaction::Ally;
 
-  if (reaction != FactionReaction::Unknown) {
-    faction_reaction_by_spawn_id[target->SpawnId] = reaction;
-    Zeal::Game::print_chat("NPC faction learned for %s.", Zeal::Game::trim_name(target->Name));
-
-    // Force the targeted NPC nameplate to refresh immediately instead of waiting for a later world update.
-    if (target->ActorInfo && target->ActorInfo->DagHeadPoint) {
-      auto display = Zeal::Game::get_display();
-      if (display) SetNameSpriteTint(display, nullptr, target);
-    }
-  }
+  if (reaction != FactionReaction::Unknown) faction_reaction_by_spawn_id[target->SpawnId] = reaction;
 }
 
 bool NamePlate::get_faction_reaction_color(const Zeal::GameStructures::Entity &entity, DWORD &color) const {
@@ -436,6 +406,8 @@ void NamePlate::parse_args(const std::vector<std::string> &args) {
   static std::unordered_map<std::string, ZealSetting<bool> *> command_map = {
       {"colors", &setting_colors},
       {"concolors", &setting_con_colors},
+      {"npcroles", &setting_npc_roles},
+      {"npcfaction", &setting_npc_faction_colors},
       {"targetcolor", &setting_target_color},
       {"charselect", &setting_char_select},
       {"hideself", &setting_hide_self},
@@ -487,8 +459,8 @@ void NamePlate::parse_args(const std::vector<std::string> &args) {
   }
 
   Zeal::Game::print_chat("Usage: /nameplate option where option is one of");
-  Zeal::Game::print_chat("tint:  colors, concolors, targetcolor, targetblink, attackonly, charselect");
-  Zeal::Game::print_chat("text:  hideself, x, hideraidpets, showpetownername, targetmarker, targethealth, inlineguild");
+  Zeal::Game::print_chat("tint:  colors, concolors, npcfaction, targetcolor, targetblink, attackonly, charselect");
+  Zeal::Game::print_chat("text:  hideself, x, hideraidpets, showpetownername, targetmarker, targethealth, inlineguild, npcroles");
   Zeal::Game::print_chat("font:  zealfont, dropshadow, healthbars, manabars, staminabars, tickbar");
   Zeal::Game::print_chat("misc:  extendedshownames");
   Zeal::Game::print_chat("shadows: /nameplate shadowfactor <float> (0.005 to 0.1 range)");
