@@ -379,6 +379,17 @@ static const char *handle_swap(const std::vector<std::string> &args) {
 }
 
 void ZealService::AddCommands() {
+  // Register NPC Info centrally after the NamePlate service has been constructed.
+  commands_hook->Add("/npcnames", {"/npcname"}, "NPC faction-color and role-label nameplate options.",
+                     [this](std::vector<std::string> &args) {
+                       if (!nameplate) {
+                         Zeal::Game::print_chat("NPC Info is not available.");
+                         return true;
+                       }
+                       nameplate->handle_npcnames_command(args);
+                       return true;
+                     });
+
   commands_hook->Add(
       "/alarm", {}, "Open the alarm ui and gives alarm functionality on old ui.",
       [this](std::vector<std::string> &args) {

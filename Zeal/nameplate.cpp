@@ -244,12 +244,6 @@ NamePlate::NamePlate(ZealService *zeal) {
                              return true;
                            });
 
-  zeal->commands_hook->Add("/npcnames", {"/npcname"}, "NPC faction-color and role-label nameplate options.",
-                           [this](std::vector<std::string> &args) {
-                             handle_npcnames_command(args);
-                             return true;
-                           });
-
   zeal->callbacks->AddOutputText(
       [this](Zeal::GameUI::ChatWnd *&wnd, std::string &msg, short &channel) { handle_faction_output(msg); });
 
@@ -303,39 +297,49 @@ std::string NamePlate::get_npc_role_label(const Zeal::GameStructures::Entity &en
 }
 
 void NamePlate::handle_npcnames_command(const std::vector<std::string> &args) {
+  auto print_status = [this]() {
+    Zeal::Game::print_chat("NPC Info loaded - roles: %s | faction colors: %s | learned NPCs this zone: %u",
+                           setting_npc_roles.get() ? "ON" : "OFF",
+                           setting_npc_faction_colors.get() ? "ON" : "OFF",
+                           static_cast<unsigned int>(faction_reaction_by_spawn_id.size()));
+  };
+
+  if (args.size() == 1) {
+    print_status();
+    Zeal::Game::print_chat("Usage: /npcnames <roles|faction|on|off|status|clear>");
+    return;
+  }
+
   if (args.size() == 2) {
-    if (args[1] == "roles") {
+    if (Zeal::String::compare_insensitive(args[1], "roles")) {
       setting_npc_roles.toggle();
       Zeal::Game::print_chat("NPC role labels %s", setting_npc_roles.get() ? "enabled" : "disabled");
       return;
     }
-    if (args[1] == "faction") {
+    if (Zeal::String::compare_insensitive(args[1], "faction")) {
       setting_npc_faction_colors.toggle();
       Zeal::Game::print_chat("NPC faction name colors %s", setting_npc_faction_colors.get() ? "enabled" : "disabled");
       if (setting_npc_faction_colors.get())
         Zeal::Game::print_chat("Faction colors are learned from normal /consider results; Zeal does not auto-consider NPCs.");
       return;
     }
-    if (args[1] == "on") {
+    if (Zeal::String::compare_insensitive(args[1], "on")) {
       setting_npc_roles.set(true);
       setting_npc_faction_colors.set(true);
       Zeal::Game::print_chat("NPC name information enabled (roles + learned faction colors)");
       return;
     }
-    if (args[1] == "off") {
+    if (Zeal::String::compare_insensitive(args[1], "off")) {
       setting_npc_roles.set(false);
       setting_npc_faction_colors.set(false);
       Zeal::Game::print_chat("NPC name information disabled");
       return;
     }
-    if (args[1] == "status") {
-      Zeal::Game::print_chat("NPC roles: %s | faction colors: %s | learned NPCs this zone: %u",
-                             setting_npc_roles.get() ? "ON" : "OFF",
-                             setting_npc_faction_colors.get() ? "ON" : "OFF",
-                             static_cast<unsigned int>(faction_reaction_by_spawn_id.size()));
+    if (Zeal::String::compare_insensitive(args[1], "status")) {
+      print_status();
       return;
     }
-    if (args[1] == "clear") {
+    if (Zeal::String::compare_insensitive(args[1], "clear")) {
       faction_reaction_by_spawn_id.clear();
       Zeal::Game::print_chat("NPC learned faction colors cleared");
       return;

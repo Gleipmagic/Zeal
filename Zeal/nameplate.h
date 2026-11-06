@@ -122,6 +122,7 @@ class NamePlate {
   void handle_targetwnd_postdraw(Zeal::GameUI::SidlWnd *wnd) const;
   void handle_entity_destructor(Zeal::GameStructures::Entity *entity);
   bool handle_shownames_command(const std::vector<std::string> &args);
+  void handle_npcnames_command(const std::vector<std::string> &args);
   int get_shownames() const;
 
  private:
@@ -150,7 +151,6 @@ class NamePlate {
   bool is_raid_member(const Zeal::GameStructures::Entity &entity) const;
   bool is_hp_updated(const Zeal::GameStructures::Entity *entity) const;
   std::string get_npc_role_label(const Zeal::GameStructures::Entity &entity) const;
-  void handle_npcnames_command(const std::vector<std::string> &args);
   void handle_faction_output(std::string &msg);
   bool get_faction_reaction_color(const Zeal::GameStructures::Entity &entity, DWORD &color) const;
   void handle_tag_command(const std::vector<std::string> &args);
