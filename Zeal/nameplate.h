@@ -200,13 +200,16 @@ class NamePlate {
   // Automatic faction scan state. The request uses the client entity-based consider routine
   // (same path as click-to-con), so it never changes the user's current target.
   static constexpr float kAutoFactionScanDistance = 400.0f;
-  static constexpr DWORD kAutoFactionPollIntervalMs = 500;
-  static constexpr DWORD kAutoFactionResponseTimeoutMs = 2000;
-  static constexpr DWORD kAutoFactionRetryIntervalMs = 10000;
+  static constexpr DWORD kAutoFactionPollIntervalMs = 250;
+  static constexpr DWORD kAutoFactionResponseTimeoutMs = 1500;
+  static constexpr DWORD kAutoFactionRetryIntervalMs = 3000;
   std::unordered_map<WORD, DWORD> faction_attempt_tick_by_spawn_id;
   WORD pending_auto_consider_spawn_id = 0;
   DWORD pending_auto_consider_tick = 0;
   DWORD last_auto_faction_scan_tick = 0;
   std::string pending_auto_consider_name_lower;
+  BYTE pending_auto_consider_visibility_state = 0;
+  BYTE last_player_visibility_state = 0;
+  bool player_visibility_state_initialized = false;
   bool suppress_next_auto_faction_message = false;
 };
