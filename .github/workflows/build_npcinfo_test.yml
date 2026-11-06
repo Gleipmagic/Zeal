@@ -32,32 +32,9 @@ jobs:
         run: |
           msbuild /m /p:Configuration=Release /p:Platform=x86 /p:zeal_build_version=$env:ZEAL_BUILD_VERSION /p:LanguageStandard=stdcpp20 $env:SOLUTION_FILE_PATH /p:ExportHeader="" /p:ScanDependencies=""
 
-      - name: Package test build
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item ./Release/Zeal.asi ./artifact/Zeal.asi
-          if (Test-Path ./Release/Zeal.pdb) { Copy-Item ./Release/Zeal.pdb ./artifact/Zeal.pdb }
-          Copy-Item ./Zeal/uifiles ./artifact/uifiles -Recurse
-          @"
-          Zeal NPC Info test build
-
-          Commands:
-            /npcnames status
-            /npcnames roles
-            /npcnames faction
-            /npcnames on
-            /npcnames off
-            /npcnames clear
-
-          Role labels are automatic for Banker, Merchant, and class trainers/guildmasters.
-          Faction colours are learned only from normal /consider results in this first test build.
-          Zeal does NOT automatically consider NPCs or generate extra consider traffic.
-          "@ | Set-Content ./artifact/NPCINFO_TEST.txt
-
-      - name: Upload test artifact
+      - name: Upload Zeal.asi only
         uses: actions/upload-artifact@v4
         with:
-          name: zeal-npcinfo-test-${{ steps.git.outputs.short_hash }}
-          path: artifact
+          name: Zeal-ASI-${{ steps.git.outputs.short_hash }}
+          path: ./Release/Zeal.asi
           if-no-files-found: error
