@@ -197,9 +197,9 @@ class NamePlate {
   };
   std::unordered_map<WORD, FactionReaction> faction_reaction_by_spawn_id;
 
-  // Automatic faction scan state. The request uses the normal EQ /consider command but is
-  // throttled and associated with the spawn id independently of the user's current target.
-  static constexpr float kAutoFactionScanDistance = 250.0f;
+  // Automatic faction scan state. The request uses the client entity-based consider routine
+  // (same path as click-to-con), so it never changes the user's current target.
+  static constexpr float kAutoFactionScanDistance = 400.0f;
   static constexpr DWORD kAutoFactionPollIntervalMs = 500;
   static constexpr DWORD kAutoFactionResponseTimeoutMs = 2000;
   static constexpr DWORD kAutoFactionRetryIntervalMs = 10000;
@@ -207,4 +207,6 @@ class NamePlate {
   WORD pending_auto_consider_spawn_id = 0;
   DWORD pending_auto_consider_tick = 0;
   DWORD last_auto_faction_scan_tick = 0;
+  std::string pending_auto_consider_name_lower;
+  bool suppress_next_auto_faction_message = false;
 };

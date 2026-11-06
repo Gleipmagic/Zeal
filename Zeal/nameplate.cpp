@@ -102,7 +102,12 @@ void NamePlate::handle_entity_destructor(Zeal::GameStructures::Entity *entity) {
   if (entity) {
     faction_reaction_by_spawn_id.erase(entity->SpawnId);
     faction_attempt_tick_by_spawn_id.erase(entity->SpawnId);
-    if (pending_auto_consider_spawn_id == entity->SpawnId) pending_auto_consider_spawn_id = 0;
+    if (pending_auto_consider_spawn_id == entity->SpawnId) {
+      pending_auto_consider_spawn_id = 0;
+      pending_auto_consider_tick = 0;
+      pending_auto_consider_name_lower.clear();
+      suppress_next_auto_faction_message = false;
+    }
   }
   auto it = nameplate_info_map.find(entity);
   if (it != nameplate_info_map.end()) nameplate_info_map.erase(it);
@@ -219,16 +224,22 @@ void NamePlate::check_raid_shownames() {
 }
 
 // Automatically learns player-specific faction reactions for nearby visible NPCs.
-// This intentionally uses the client's normal /consider path instead of hard-coding a network opcode.
-// One unknown NPC is checked at a time and the user's target is restored immediately.
+// This calls the same entity-based consider routine used by click-to-con, so it never touches
+// the user's current target. Only one unknown NPC is checked at a time.
 void NamePlate::auto_scan_npc_faction() {
   if (!setting_npc_faction_colors.get()) {
     pending_auto_consider_spawn_id = 0;
+    pending_auto_consider_tick = 0;
+    pending_auto_consider_name_lower.clear();
+    suppress_next_auto_faction_message = false;
     return;
   }
 
   if (!Zeal::Game::is_in_game() || !Zeal::Game::get_self()) {
     pending_auto_consider_spawn_id = 0;
+    pending_auto_consider_tick = 0;
+    pending_auto_consider_name_lower.clear();
+    suppress_next_auto_faction_message = false;
     faction_reaction_by_spawn_id.clear();
     faction_attempt_tick_by_spawn_id.clear();
     last_auto_faction_scan_tick = 0;
@@ -237,19 +248,24 @@ void NamePlate::auto_scan_npc_faction() {
 
   const DWORD now = GetTickCount();
 
-  // Give the previous consider request time to return before issuing another.
+  // Never overlap consider requests. A response normally arrives almost immediately, but a timeout
+  // keeps a lost response from blocking the scanner forever.
   if (pending_auto_consider_spawn_id != 0) {
     if ((now - pending_auto_consider_tick) < kAutoFactionResponseTimeoutMs) return;
-    pending_auto_consider_spawn_id = 0;  // Timed out; it may be retried later.
+    pending_auto_consider_spawn_id = 0;
+    pending_auto_consider_tick = 0;
+    pending_auto_consider_name_lower.clear();
+    suppress_next_auto_faction_message = false;
   }
 
   if ((now - last_auto_faction_scan_tick) < kAutoFactionPollIntervalMs) return;
   last_auto_faction_scan_tick = now;
 
-  // Match normal nearby targeting limits and only consider actors the client currently regards as visible.
+  // Use the same visible actor list as extended nameplates. This does not touch the player's target.
   auto visible_entities = Zeal::Game::get_world_visible_actor_list(kAutoFactionScanDistance, false);
   for (auto *entity : visible_entities) {
     if (!entity || entity->Type != Zeal::GameEnums::EntityTypes::NPC || entity->PetOwnerSpawnId) continue;
+    if (!entity->ActorInfo) continue;
     if (faction_reaction_by_spawn_id.count(entity->SpawnId)) continue;
 
     auto attempt = faction_attempt_tick_by_spawn_id.find(entity->SpawnId);
@@ -257,19 +273,22 @@ void NamePlate::auto_scan_npc_faction() {
         (now - attempt->second) < kAutoFactionRetryIntervalMs)
       continue;
 
-    // The original EQ /consider command reads the current target. Temporarily point it at the
-    // candidate, issue /consider through the original command interpreter, then restore the target
-    // in the same main-loop callback. pending_auto_consider_spawn_id associates the asynchronous
-    // faction text with the NPC that was queried.
-    auto *saved_target = Zeal::Game::get_target();
     pending_auto_consider_spawn_id = entity->SpawnId;
     pending_auto_consider_tick = now;
+    pending_auto_consider_name_lower = Zeal::Game::strip_name(entity->Name);
+    std::transform(pending_auto_consider_name_lower.begin(), pending_auto_consider_name_lower.end(),
+                   pending_auto_consider_name_lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    suppress_next_auto_faction_message = true;
     faction_attempt_tick_by_spawn_id[entity->SpawnId] = now;
 
-    Zeal::Game::set_target(entity);
-    ForwardCommand("/consider");
-    Zeal::Game::set_target(saved_target);
-    return;  // Only one server request per polling interval.
+    // This is the EQ client entity-based consider routine used by right-click and Zeal's
+    // /leftclickcon path. It accepts an Entity* directly, so the user's current target is never
+    // changed or cleared.
+    auto consider_entity =
+        reinterpret_cast<void(__cdecl *)(Zeal::GameStructures::Entity *, const char *)>(0x004F6364);
+    consider_entity(entity, " ");
+    return;  // One automatic consider per polling interval.
   }
 }
 
@@ -387,13 +406,13 @@ void NamePlate::handle_npcnames_command(const std::vector<std::string> &args) {
       setting_npc_faction_colors.toggle();
       Zeal::Game::print_chat("NPC faction name colors %s", setting_npc_faction_colors.get() ? "enabled" : "disabled");
       if (setting_npc_faction_colors.get())
-        Zeal::Game::print_chat("Faction colors automatically scan nearby visible NPCs using throttled consider requests.");
+        Zeal::Game::print_chat("Faction colors automatically scan visible NPCs without changing your target.");
       return;
     }
     if (Zeal::String::compare_insensitive(args[1], "on")) {
       setting_npc_roles.set(true);
       setting_npc_faction_colors.set(true);
-      Zeal::Game::print_chat("NPC name information enabled (roles + automatic faction colors)");
+      Zeal::Game::print_chat("NPC name information enabled (roles + silent automatic faction colors)");
       return;
     }
     if (Zeal::String::compare_insensitive(args[1], "off")) {
@@ -419,15 +438,6 @@ void NamePlate::handle_npcnames_command(const std::vector<std::string> &args) {
 void NamePlate::handle_faction_output(std::string &msg) {
   if (!setting_npc_faction_colors.get()) return;
 
-  // Automatic considers restore the user's target immediately, so associate their asynchronous
-  // response with the remembered spawn id. Manual /consider continues to use the current target.
-  WORD faction_spawn_id = pending_auto_consider_spawn_id;
-  if (faction_spawn_id == 0) {
-    auto *target = Zeal::Game::get_target();
-    if (!target || target->Type != Zeal::GameEnums::EntityTypes::NPC) return;
-    faction_spawn_id = target->SpawnId;
-  }
-
   std::string text = msg;
   std::transform(text.begin(), text.end(), text.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -452,9 +462,36 @@ void NamePlate::handle_faction_output(std::string &msg) {
   else if (text.find("as an ally") != std::string::npos || text.find("is an ally") != std::string::npos)
     reaction = FactionReaction::Ally;
 
-  if (reaction != FactionReaction::Unknown) {
-    faction_reaction_by_spawn_id[faction_spawn_id] = reaction;
-    if (pending_auto_consider_spawn_id == faction_spawn_id) pending_auto_consider_spawn_id = 0;
+  if (reaction == FactionReaction::Unknown) return;
+
+  // Automatic considers are associated with the spawn id remembered when the request was sent.
+  // Manual /consider still learns the current target when there is no automatic request pending.
+  const bool auto_name_matches = pending_auto_consider_name_lower.empty() ||
+                                 text.find(pending_auto_consider_name_lower) != std::string::npos;
+  const bool automatic = pending_auto_consider_spawn_id != 0 && auto_name_matches;
+  WORD faction_spawn_id = automatic ? pending_auto_consider_spawn_id : 0;
+  if (!automatic) {
+    auto *target = Zeal::Game::get_target();
+    if (!target || target->Type != Zeal::GameEnums::EntityTypes::NPC) return;
+    faction_spawn_id = target->SpawnId;
+  }
+
+  faction_reaction_by_spawn_id[faction_spawn_id] = reaction;
+
+  // Refresh this NPC immediately so its new faction color does not wait for a later world update.
+  auto *entity = Zeal::Game::get_entity_by_id(faction_spawn_id);
+  if (entity && entity->ActorInfo && entity->ActorInfo->DagHeadPoint) {
+    void *display = Zeal::Game::get_display();
+    if (display) SetNameSpriteTint(display, nullptr, entity);
+  }
+
+  if (automatic) {
+    pending_auto_consider_spawn_id = 0;
+    pending_auto_consider_tick = 0;
+
+    // Do not clear msg here. AddOutputText is too late in the display path to reliably suppress it.
+    // suppress_next_auto_faction_message remains set until handle_zeal_spam_filter drops this
+    // specific automatic consider line. Manual right-click or /consider messages are not flagged.
   }
 }
 
@@ -1600,6 +1637,61 @@ static std::string prettyprint_tag_message(const std::string &msg) {
 }
 
 bool NamePlate::handle_zeal_spam_filter(short &channel, std::string &msg) {
+  // Automatic faction probes use the normal consider output path, but should be invisible to the
+  // player. This callback is early enough in Zeal's chat path that clearing msg actually suppresses
+  // the line. Keep this independent of the tag spam-filter setting.
+  if (!msg.empty() && suppress_next_auto_faction_message && setting_npc_faction_colors.get()) {
+    std::string faction_text = msg;
+    std::transform(faction_text.begin(), faction_text.end(), faction_text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    FactionReaction reaction = FactionReaction::Unknown;
+    if (faction_text.find("scowls at you") != std::string::npos &&
+        faction_text.find("ready to attack") != std::string::npos)
+      reaction = FactionReaction::Scowls;
+    else if (faction_text.find("threateningly") != std::string::npos)
+      reaction = FactionReaction::Threatening;
+    else if (faction_text.find("dubious") != std::string::npos)
+      reaction = FactionReaction::Dubious;
+    else if (faction_text.find("apprehensive") != std::string::npos)
+      reaction = FactionReaction::Apprehensive;
+    else if (faction_text.find("indifferent") != std::string::npos)
+      reaction = FactionReaction::Indifferent;
+    else if (faction_text.find("amiabl") != std::string::npos)
+      reaction = FactionReaction::Amiable;
+    else if (faction_text.find("kindly") != std::string::npos)
+      reaction = FactionReaction::Kindly;
+    else if (faction_text.find("warmly") != std::string::npos)
+      reaction = FactionReaction::Warmly;
+    else if (faction_text.find("as an ally") != std::string::npos ||
+             faction_text.find("is an ally") != std::string::npos)
+      reaction = FactionReaction::Ally;
+
+    const bool auto_name_matches = pending_auto_consider_name_lower.empty() ||
+                                   faction_text.find(pending_auto_consider_name_lower) != std::string::npos;
+    if (reaction != FactionReaction::Unknown && auto_name_matches) {
+      // If this filter runs before AddOutputText, learn the reaction here. If AddOutputText already
+      // ran, pending_auto_consider_spawn_id will be zero and the reaction is already cached.
+      const WORD faction_spawn_id = pending_auto_consider_spawn_id;
+      if (faction_spawn_id != 0) {
+        faction_reaction_by_spawn_id[faction_spawn_id] = reaction;
+        auto *entity = Zeal::Game::get_entity_by_id(faction_spawn_id);
+        if (entity && entity->ActorInfo && entity->ActorInfo->DagHeadPoint) {
+          void *display = Zeal::Game::get_display();
+          if (display) SetNameSpriteTint(display, nullptr, entity);
+        }
+      }
+
+      pending_auto_consider_spawn_id = 0;
+      pending_auto_consider_tick = 0;
+      pending_auto_consider_name_lower.clear();
+      suppress_next_auto_faction_message = false;
+      msg.clear();
+      channel = CHANNEL_ZEAL_SPAM;
+      return true;
+    }
+  }
+
   if (msg.empty() || !setting_tag_filter.get()) return false;
 
   // First do a quick channel check to bail out early.
