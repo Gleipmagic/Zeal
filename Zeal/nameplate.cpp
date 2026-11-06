@@ -238,7 +238,20 @@ NamePlate::NamePlate(ZealService *zeal) {
                    hook_type_replace_call);  // New target
 
   zeal->commands_hook->Add("/nameplate", {}, "Toggles nameplate options on/off.",
-                           [this](std::vector<std::string> &args) {
+                           [this, zeal](std::vector<std::string> &args) {
+                             // Diagnostic path that uses the already-proven /nameplate registration.
+                             // This tells us what is actually present in the live command table.
+                             if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "npctest")) {
+                               const bool npc_registered =
+                                   zeal->commands_hook->CommandFunctions.count("/npcnames") != 0;
+                               Zeal::Game::print_chat(
+                                   "NPC Info diagnostic: module ACTIVE | /npcnames registered: %s | roles: %s | faction: %s",
+                                   npc_registered ? "YES" : "NO",
+                                   setting_npc_roles.get() ? "ON" : "OFF",
+                                   setting_npc_faction_colors.get() ? "ON" : "OFF");
+                               return true;
+                             }
+
                              parse_args(args);
                              if (update_options_ui_callback) update_options_ui_callback();
                              return true;
