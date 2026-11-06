@@ -237,18 +237,13 @@ NamePlate::NamePlate(ZealService *zeal) {
   zeal->hooks->Add("SetNameSpriteTint_UpdateState", 0x004aafba, SetNameSpriteTint_UpdateState,
                    hook_type_replace_call);  // New target
 
-  zeal->commands_hook->Add("/nameplate", {"/npcnames", "/npcname"}, "Toggles nameplate options on/off.",
+  zeal->commands_hook->Add("/nameplate", {}, "Toggles nameplate options on/off.",
                            [this](std::vector<std::string> &args) {
-                             // Route /npcnames through the proven /nameplate command registration.
-                             if (!args.empty() &&
-                                 (Zeal::String::compare_insensitive(args[0], "/npcnames") ||
-                                  Zeal::String::compare_insensitive(args[0], "/npcname")))
-                               handle_npcnames_command(args);
-                             else
-                               parse_args(args);
+                             parse_args(args);
                              if (update_options_ui_callback) update_options_ui_callback();
                              return true;
                            });
+
 
   zeal->callbacks->AddOutputText(
       [this](Zeal::GameUI::ChatWnd *&wnd, std::string &msg, short &channel) { handle_faction_output(msg); });
@@ -388,7 +383,12 @@ void NamePlate::handle_faction_output(std::string &msg) {
   if (reaction != FactionReaction::Unknown) {
     faction_reaction_by_spawn_id[target->SpawnId] = reaction;
     Zeal::Game::print_chat("NPC faction learned for %s.", Zeal::Game::trim_name(target->Name));
-    if (target->ActorInfo && target->ActorInfo->DagHeadPoint) handle_SetNameSpriteTint(target);
+
+    // Force the targeted NPC nameplate to refresh immediately instead of waiting for a later world update.
+    if (target->ActorInfo && target->ActorInfo->DagHeadPoint) {
+      auto display = Zeal::Game::get_display();
+      if (display) SetNameSpriteTint(display, nullptr, target);
+    }
   }
 }
 
@@ -413,43 +413,6 @@ bool NamePlate::get_faction_reaction_color(const Zeal::GameStructures::Entity &e
 }
 
 void NamePlate::parse_args(const std::vector<std::string> &args) {
-  // NPC Info fallback controls through the existing /nameplate command.
-  if (args.size() >= 2) {
-    std::vector<std::string> npc_args = {"/npcnames"};
-    if (Zeal::String::compare_insensitive(args[1], "npc") ||
-        Zeal::String::compare_insensitive(args[1], "npcnames") ||
-        Zeal::String::compare_insensitive(args[1], "npcstatus")) {
-      npc_args.push_back("status");
-      handle_npcnames_command(npc_args);
-      return;
-    }
-    if (Zeal::String::compare_insensitive(args[1], "npcroles")) {
-      npc_args.push_back("roles");
-      handle_npcnames_command(npc_args);
-      return;
-    }
-    if (Zeal::String::compare_insensitive(args[1], "npcfaction")) {
-      npc_args.push_back("faction");
-      handle_npcnames_command(npc_args);
-      return;
-    }
-    if (Zeal::String::compare_insensitive(args[1], "npcon")) {
-      npc_args.push_back("on");
-      handle_npcnames_command(npc_args);
-      return;
-    }
-    if (Zeal::String::compare_insensitive(args[1], "npcoff")) {
-      npc_args.push_back("off");
-      handle_npcnames_command(npc_args);
-      return;
-    }
-    if (Zeal::String::compare_insensitive(args[1], "npcclear")) {
-      npc_args.push_back("clear");
-      handle_npcnames_command(npc_args);
-      return;
-    }
-  }
-
   static std::unordered_map<std::string, ZealSetting<bool> *> command_map = {
       {"colors", &setting_colors},
       {"concolors", &setting_con_colors},
