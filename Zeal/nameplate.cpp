@@ -244,11 +244,11 @@ NamePlate::NamePlate(ZealService *zeal) {
                              return true;
                            });
 
-  // Register NPC Info beside the other proven NamePlate commands.
+  // NPC Info command is registered locally in the NamePlate module.
+  // This mirrors the proven module-local command pattern used by working Zeal features.
   zeal->commands_hook->Add("/npcnames", {"/npcname"}, "NPC faction-color and role-label nameplate options.",
                            [this](std::vector<std::string> &args) {
                              handle_npcnames_command(args);
-                             if (update_options_ui_callback) update_options_ui_callback();
                              return true;
                            });
 
@@ -389,9 +389,13 @@ void NamePlate::handle_faction_output(std::string &msg) {
 
   if (reaction != FactionReaction::Unknown) {
     faction_reaction_by_spawn_id[target->SpawnId] = reaction;
-    // Apply the learned color now rather than waiting for a later nameplate update.
-    handle_SetNameSpriteTint(target);
     Zeal::Game::print_chat("NPC faction learned for %s.", Zeal::Game::trim_name(target->Name));
+
+    // Force the targeted NPC nameplate to refresh immediately instead of waiting for a later world update.
+    if (target->ActorInfo && target->ActorInfo->DagHeadPoint) {
+      auto display = Zeal::Game::get_display();
+      if (display) SetNameSpriteTint(display, nullptr, target);
+    }
   }
 }
 
@@ -437,24 +441,7 @@ void NamePlate::parse_args(const std::vector<std::string> &args) {
       {"zealfont", &setting_zeal_fonts},
       {"dropshadow", &setting_drop_shadow},
       {"extendedshownames", &setting_extended_shownames},
-      // Fallback controls on the existing /nameplate command.
-      {"npcroles", &setting_npc_roles},
-      {"npcfaction", &setting_npc_faction_colors},
   };
-
-  if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "npcstatus")) {
-    Zeal::Game::print_chat("NPC Info - roles: %s | faction colors: %s | learned NPCs this zone: %u",
-                           setting_npc_roles.get() ? "ON" : "OFF",
-                           setting_npc_faction_colors.get() ? "ON" : "OFF",
-                           static_cast<unsigned int>(faction_reaction_by_spawn_id.size()));
-    return;
-  }
-
-  if (args.size() == 2 && Zeal::String::compare_insensitive(args[1], "npcclear")) {
-    faction_reaction_by_spawn_id.clear();
-    Zeal::Game::print_chat("NPC learned faction colors cleared");
-    return;
-  }
 
   if (args.size() == 2 && args[1] == "dump") {
     if (sprite_font) sprite_font->dump();
@@ -490,8 +477,7 @@ void NamePlate::parse_args(const std::vector<std::string> &args) {
   Zeal::Game::print_chat("tint:  colors, concolors, targetcolor, targetblink, attackonly, charselect");
   Zeal::Game::print_chat("text:  hideself, x, hideraidpets, showpetownername, targetmarker, targethealth, inlineguild");
   Zeal::Game::print_chat("font:  zealfont, dropshadow, healthbars, manabars, staminabars, tickbar");
-  Zeal::Game::print_chat("misc:  extendedshownames, npcroles, npcfaction, npcstatus, npcclear");
-  Zeal::Game::print_chat("NPC Info: /nameplate npcroles | npcfaction | npcstatus | npcclear");
+  Zeal::Game::print_chat("misc:  extendedshownames");
   Zeal::Game::print_chat("shadows: /nameplate shadowfactor <float> (0.005 to 0.1 range)");
 }
 
